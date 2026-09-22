@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AR ฟันผลไม้วิชาคอมพิวเตอร์ (AR Tech Ninja)</title>
+    
+    <!-- Google Fonts: Mitr -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Mitr:wght@300;400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- MediaPipe Hands & Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Mitr', sans-serif;
+            user-select: none;
+        }
+
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #111;
+        }
+
+        /* Layering System */
+        /* Video is horizontally mirrored using scaleX(-1) */
+        #video-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; transform: scaleX(-1); }
+        #three-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
+        #trail-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; }
+        #labels-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none; overflow: hidden;}
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; display: flex; flex-direction: column; }
+        
+        .panel {
+            background: rgba(0, 0, 0, 0.85);
+            border: 3px solid #00ffcc;
+            border-radius: 20px;
+            padding: 30px;
+            text-align: center;
+            color: white;
+            box-shadow: 0 0 30px rgba(0, 255, 204, 0.6);
+            pointer-events: auto;
+            max-width: 90%;
+            width: 500px;
+        }
+
+        /* Start Screen */
+        #start-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; justify-content: center; align-items: center;
+            background: rgba(0,0,0,0.85); z-index: 10;
+        }
+
+        .checklist { text-align: left; margin: 25px 0; font-size: 1.2rem; background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px;}
+        .check-item { display: flex; align-items: center; margin-bottom: 15px; }
+        .check-item:last-child { margin-bottom: 0; }
+        .status-icon { width: 28px; height: 28px; margin-right: 15px; display: inline-block; border-radius: 50%; border: 3px solid #555; position: relative; }
+        .status-icon.loading { border-color: #f39c12; border-top-color: transparent; animation: spin 1s linear infinite; }
+        .status-icon.ready { border-color: #2ecc71; background-color: #2ecc71; }
+        .status-icon.ready::after { content: '✓'; position: absolute; top: -1px; left: 5px; color: white; font-size: 18px; font-weight: bold; }
+        .status-icon.error { border-color: #e74c3c; background-color: #e74c3c; }
+        .status-icon.error::after { content: '✕'; position: absolute; top: -1px; left: 7px; color: white; font-size: 18px; font-weight: bold; }
+
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Buttons */
+        .btn {
+            background: linear-gradient(to bottom, #00ffcc, #00b38f);
+            color: #000; font-size: 1.6rem; font-weight: 600;
+            padding: 12px 40px; border: none; border-radius: 12px;
+            cursor: pointer; transition: all 0.1s;
+            box-shadow: 0 6px 0 #006652, 0 10px 10px rgba(0,0,0,0.5);
+            pointer-events: auto;
+            width: 100%;
+        }
+        .btn:active { transform: translateY(6px); box-shadow: 0 0px 0 #006652, 0 2px 2px rgba(0,0,0,0.5); }
+        .btn:disabled { background: #555; color: #888; box-shadow: 0 6px 0 #333; cursor: not-allowed; }
+
+        /* HUD */
+        #hud { display: none; width: 100%; padding: 20px; justify-content: space-between; align-items: flex-start; }
+        .hud-left { display: flex; flex-direction: column; align-items: flex-start;}
+        .hud-center { display: flex; flex-direction: column; align-items: center;}
+        
+        .hud-box {
+            background: rgba(0, 0, 0, 0.7); border: 2px solid #fff; border-radius: 12px;
+            padding: 10px 25px; color: white; font-size: 1.8rem; font-weight: bold;
+            text-shadow: 2px 2px 0 #000; box-shadow: 0 6px 10px rgba(0,0,0,0.5);
+            margin-bottom: 5px;
+        }
+        
+        #time-display { color: #f1c40f; font-size: 2.2rem;}
+        
+        #center-msg { font-size: 1.5rem; font-weight: bold; color: #f1c40f; text-align: center; min-height: 40px; transition: opacity 0.3s; text-shadow: 2px 2px 0 #000;}
+
+        /* Side Controls */
+        .side-controls { display: flex; flex-direction: column; gap: 12px; pointer-events: auto; }
+        .toggle-btn {
+            padding: 10px 20px; border-radius: 10px; font-size: 1.1rem; font-weight: bold; cursor: pointer; border: none;
+            box-shadow: 0 5px 0 #333; transition: all 0.1s; color: white;
+        }
+        .toggle-btn.on { background: linear-gradient(to bottom, #2ecc71, #27ae60); box-shadow: 0 5px 0 #1e8449; }
+        .toggle-btn.off { background: linear-gradient(to bottom, #7f8c8d, #616a6b); box-shadow: 0 5px 0 #4d5656; }
+        .toggle-btn:active { transform: translateY(5px); box-shadow: 0 0px 0 #111; }
+
+        /* Labels and Popups */
+        .fruit-label {
+            position: absolute; transform: translate(-50%, -50%);
+            font-size: 2.5rem; font-weight: 600; color: white;
+            text-shadow: -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0px 5px 15px rgba(0,0,0,0.9);
+            pointer-events: none; white-space: nowrap; transition: opacity 0.1s;
+        }
+        .popup-text {
+            position: absolute; transform: translate(-50%, -50%);
+            font-size: 4rem; font-weight: bold; pointer-events: none;
+            text-shadow: 3px 3px 0 #000;
+            animation: floatUpFade 1s ease-out forwards;
+        }
+        .popup-green { color: #2ecc71; }
+        .popup-red { color: #e74c3c; }
+
+        @keyframes floatUpFade {
+            0% { transform: translate(-50%, -50%) scale(0.5); opacity: 1; }
+            50% { transform: translate(-50%, -100%) scale(1.2); opacity: 1; }
+            100% { transform: translate(-50%, -150%) scale(1); opacity: 0; }
+        }
+
+        /* End Screen */
+        #end-screen { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; justify-content: center; align-items: center; background: rgba(0,0,0,0.9); z-index: 10; }
+        .final-score { font-size: 5rem; color: #00ffcc; margin: 20px 0; text-shadow: 0 0 30px #00ffcc; font-weight: bold;}
+        
+        #watermark { position: absolute; bottom: 10px; right: 15px; font-size: 1.2rem; color: rgba(255,255,255,0.7); pointer-events: none; z-index: 20; text-shadow: 1px 1px 2px #000;}
+    </style>
+</head>
+<body>
+
+    <video id="video-layer" autoplay playsinline></video>
+    <canvas id="three-canvas"></canvas>
+    <canvas id="trail-canvas"></canvas>
+    <div id="labels-layer"></div>
+
+    <div id="ui-layer">
+        <!-- HUD -->
+        <div id="hud">
+            <div class="hud-left">
+                <div class="hud-box">คะแนน: <span id="score-display">0</span></div>
+                <div class="hud-box" style="font-size: 1.4rem; padding: 5px 15px;">ชุดที่: <span id="wave-display">0/15</span></div>
+            </div>
+            
+            <div class="hud-center">
+                <div class="hud-box" id="time-display">00:00</div>
+                <div id="center-msg"></div>
+            </div>
+            
+            <div class="side-controls">
+                <button id="btn-toggle-points" class="toggle-btn on">จุดมือ: เปิด</button>
+                <button id="btn-toggle-sound" class="toggle-btn on">เสียง: เปิด</button>
+                <button id="btn-restart" class="toggle-btn on" style="background: linear-gradient(to bottom, #e67e22, #d35400); box-shadow: 0 5px 0 #a04000;">เริ่มใหม่</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Start Screen -->
+    <div id="start-screen">
+        <div class="panel">
+            <h1 style="font-size: 3rem; margin-bottom: 10px; color: #00ffcc; text-shadow: 0 0 10px rgba(0,255,204,0.5);">AR Tech Ninja</h1>
+            <h2 style="font-size: 1.6rem; margin-bottom: 20px;">AR ฟันผลไม้วิชาคอมพิวเตอร์</h2>
+            <p style="font-size: 1.2rem; color: #ddd; line-height: 1.5;">กติกา: ใช้มือแกว่งฟันเฉพาะ <span style="color:#2ecc71; font-weight: bold; font-size: 1.4rem;">"คำศัพท์คอมพิวเตอร์"</span><br>ระวัง! ห้ามฟันคำหลอก และห้ามปล่อยคำศัพท์ตกพื้น</p>
+            
+            <div class="checklist">
+                <div class="check-item">
+                    <div id="status-cam" class="status-icon"></div>
+                    <span>เปิดกล้อง (Camera)</span>
+                </div>
+                <div class="check-item">
+                    <div id="status-ai" class="status-icon"></div>
+                    <span>โหลด AI Track มือ</span>
+                </div>
+            </div>
+            
+            <button id="btn-start" class="btn" style="display: none;">เริ่มเกม</button>
+            <button id="btn-check" class="btn">ตรวจสอบระบบ</button>
+            <p id="error-msg" style="color: #e74c3c; margin-top: 15px; display: none; font-size: 1.1rem;"></p>
+        </div>
+    </div>
+
+    <!-- End Screen -->
+    <div id="end-screen">
+        <div class="panel">
+            <h1 style="font-size: 3.5rem;">จบเกม!</h1>
+            <div class="final-score" id="final-score-display">0</div>
+            <button id="btn-play-again" class="btn">เล่นอีกครั้ง</button>
+        </div>
+    </div>
+    
+    <div id="watermark">นายพีรภัทร หมั่นจิตร 68115271113</div>
+
+    <script>
+        const CONFIG = {
+            TOTAL_WAVES: 15,
+            SCORE_CORRECT: 10,
+            SCORE_WRONG: -5,
+            SCORE_MISS: -5,
+            TRAIL_LIFETIME: 200, // ms for fade out
+            SLASH_VELOCITY_THRESHOLD: 1.2, // min speed to register slash (adjusted for easier play)
+            GRAVITY: 0.012, // softer gravity for better readability
+            FRUIT_RADIUS: 1.6
+        };
+
+        const WORDS = {
+            target: ["คีย์บอร์ด", "เมาส์", "ซีพียู", "จอภาพ", "ซอฟต์แวร์", "ฮาร์ดแวร์", "อินเทอร์เน็ต", "โค้ดดิ้ง", "แฟลชไดร์ฟ", "โปรแกรม", "ไวรัส", "เว็บไซต์"],
+            dummy: ["ดินสอ", "ยางลบ", "ไม้บรรทัด", "กระทะ", "หม้อ", "แมว", "สุนัข", "มะม่วง", "ทุเรียน", "จักรยาน", "รองเท้า", "เสื้อผ้า"]
+        };
+
+        const DOM = {
+            video: document.getElementById('video-layer'),
+            threeCanvas: document.getElementById('three-canvas'),
+            trailCanvas: document.getElementById('trail-canvas'),
+            labelsLayer: document.getElementById('labels-layer'),
+            
+            startScreen: document.getElementById('start-screen'),
+            endScreen: document.getElementById('end-screen'),
+            hud: document.getElementById('hud'),
+            
+            btnCheck: document.getElementById('btn-check'),
+            btnStart: document.getElementById('btn-start'),
+            btnPlayAgain: document.getElementById('btn-play-again'),
+            btnRestart: document.getElementById('btn-restart'),
+            btnTogglePoints: document.getElementById('btn-toggle-points'),
+            btnToggleSound: document.getElementById('btn-toggle-sound'),
+            
+            statusCam: document.getElementById('status-cam'),
+            statusAI: document.getElementById('status-ai'),
+            errorMsg: document.getElementById('error-msg'),
+            
+            scoreDisplay: document.getElementById('score-display'),
+            waveDisplay: document.getElementById('wave-display'),
+            timeDisplay: document.getElementById('time-display'),
+            centerMsg: document.getElementById('center-msg'),
+            finalScoreDisplay: document.getElementById('final-score-display')
+        };
+
+        const ctxTrail = DOM.trailCanvas.getContext('2d');
+
+        const STATE = {
+            isPlaying: false,
+            score: 0,
+            wave: 0,
+            gameStartTime: 0,
+            camReady: false,
+            aiReady: false,
+            showPoints: true,
+            soundEnabled: true,
+            fruits: [],
+            handPoints: [], 
+            slashTrail: [], // Array of points {x, y, time, break}
+            lastHandPos: null,
+            waveActive: false,
+            msgTimer: null
+        };
+
+        class AudioSynth {
+            constructor() {
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            resume() {
+                if (this.ctx.state === 'suspended') this.ctx.resume();
+            }
+
+            playTone(freq, type, duration, vol=0.1) {
+                if (!STATE.soundEnabled) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+                
+                gain.gain.setValueAtTime(vol, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + duration);
+                
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + duration);
+            }
+
+            // UI Sounds
+            playClick() { this.playTone(600, 'sine', 0.1, 0.1); }
+            playSuccess() { this.playTone(800, 'square', 0.2, 0.05); setTimeout(()=>this.playTone(1200, 'square', 0.3, 0.05), 100); }
+            playError() { this.playTone(200, 'sawtooth', 0.4, 0.1); }
+            playWaveStart() { this.playTone(400, 'square', 0.3, 0.05); setTimeout(()=>this.playTone(600, 'square', 0.3, 0.05), 150);}
+            playGameOver() { this.playTone(300, 'sawtooth', 0.5, 0.2); setTimeout(() => this.playTone(400, 'sine', 1, 0.2), 500); }
+
+            // Gameplay Sounds
+            playSwoosh() {
+                if (!STATE.soundEnabled) return;
+                // Burst of filtered noise for a sword swoosh
+                const bufferSize = this.ctx.sampleRate * 0.2;
+                const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+                const noise = this.ctx.createBufferSource();
+                noise.buffer = buffer;
+                
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'bandpass';
+                filter.frequency.setValueAtTime(1000, this.ctx.currentTime);
+                filter.frequency.exponentialRampToValueAtTime(100, this.ctx.currentTime + 0.2);
+
+                const gain = this.ctx.createGain();
+                gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+
+                noise.connect(filter); filter.connect(gain); gain.connect(this.ctx.destination);
+                noise.start();
+            }
+
+            playSlice() {
+                if (!STATE.soundEnabled) return;
+                // High pitch short drop for satisfying hit
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(1200, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(100, this.ctx.currentTime + 0.2);
+                gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+                osc.connect(gain); gain.connect(this.ctx.destination);
+                osc.start(); osc.stop(this.ctx.currentTime + 0.2);
+            }
+
+            playScoreUp() {
+                if (!STATE.soundEnabled) return;
+                this.playTone(700, 'sine', 0.1, 0.2);
+                setTimeout(() => this.playTone(1000, 'sine', 0.2, 0.2), 100);
+            }
+
+            playScoreDown() {
+                if (!STATE.soundEnabled) return;
+                this.playTone(300, 'triangle', 0.1, 0.2);
+                setTimeout(() => this.playTone(200, 'triangle', 0.3, 0.2), 100);
+            }
+            
+            playMiss() {
+                if (!STATE.soundEnabled) return;
+                this.playTone(150, 'sawtooth', 0.4, 0.2);
+            }
+        }
+        const sfx = new AudioSynth();
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 15;
+
+        const renderer = new THREE.WebGLRenderer({ canvas: DOM.threeCanvas, alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 10, 5);
+        scene.add(dirLight);
+
+        // Handle Resizing
+        window.addEventListener('resize', () => {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            renderer.setSize(w, h);
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+            DOM.trailCanvas.width = w;
+            DOM.trailCanvas.height = h;
+        });
+        DOM.trailCanvas.width = window.innerWidth;
+        DOM.trailCanvas.height = window.innerHeight;
+
+        // Shared 3D Geometries
+        // Using Icosahedron for a low-poly stylized look, easier to read
+        const fruitGeo = new THREE.IcosahedronGeometry(CONFIG.FRUIT_RADIUS, 1);
+        
+        // To make two halves that look right when sliced, we use two half-spheres
+        // phiStart 0, phiLength Math.PI creates a half sphere
+        const halfGeo = new THREE.SphereGeometry(CONFIG.FRUIT_RADIUS, 16, 16, 0, Math.PI); 
+        
+        // Colors for fruits
+        const FRUIT_COLORS = [0xff3366, 0x33ccff, 0xffcc00, 0x9933ff, 0x00ff99, 0xff9900];
+
+        class Fruit {
+            constructor(word, isTarget) {
+                this.word = word;
+                this.isTarget = isTarget;
+                this.isSliced = false;
+                this.active = true;
+                
+                // Assign a random color
+                const colorHex = FRUIT_COLORS[Math.floor(Math.random() * FRUIT_COLORS.length)];
+                
+                // Material needs to be unique if we dispose it later, or we can reuse. 
+                // Creating per-fruit for simplicity in memory management here.
+                this.material = new THREE.MeshPhongMaterial({ 
+                    color: colorHex, 
+                    flatShading: true,
+                    shininess: 80
+                });
+                
+                this.mesh = new THREE.Mesh(fruitGeo, this.material);
+                
+                // Spawn logic: Jump from bottom
+                // Spread X randomly across the view width at z=0 (roughly -10 to +10)
+                const spawnX = (Math.random() - 0.5) * 20; 
+                this.mesh.position.set(spawnX, -15, 0);
+                
+                // Initial velocities (Parabola)
+                // Aim slightly towards center to avoid flying off sides immediately
+                this.velX = (0 - spawnX) * 0.01 + (Math.random() - 0.5) * 0.1;
+                this.velY = 0.55 + Math.random() * 0.15; // Jump strength
+                this.velZ = (Math.random() - 0.5) * 0.1;
+                
+                this.rotX = Math.random() * 0.1;
+                this.rotY = Math.random() * 0.1;
+
+                scene.add(this.mesh);
+
+                // Setup the two halves (hidden initially)
+                this.half1 = new THREE.Mesh(halfGeo, this.material);
+                this.half2 = new THREE.Mesh(halfGeo, this.material);
+                this.half1.visible = false;
+                this.half2.visible = false;
+                scene.add(this.half1);
+                scene.add(this.half2);
+
+                // Setup HTML 2D Label overlay
+                this.label = document.createElement('div');
+                this.label.className = 'fruit-label';
+                this.label.innerText = word;
+                // Add text stroke matching fruit color for better association
+                const colorStr = '#' + colorHex.toString(16).padStart(6, '0');
+                this.label.style.webkitTextStroke = `1.5px ${colorStr}`;
+                DOM.labelsLayer.appendChild(this.label);
+            }
+
+            update() {
+                if (!this.active) return;
+
+                if (!this.isSliced) {
+                    // Normal Flight Physics
+                    this.mesh.position.x += this.velX;
+                    this.mesh.position.y += this.velY;
+                    this.mesh.position.z += this.velZ;
+                    this.mesh.rotation.x += this.rotX;
+                    this.mesh.rotation.y += this.rotY;
+                    this.velY -= CONFIG.GRAVITY;
+
+                    // Sync HTML Label to 3D position
+                    const screenPos = this.getScreenPos(this.mesh.position);
+                    this.label.style.left = `${screenPos.x}px`;
+                    this.label.style.top = `${screenPos.y}px`;
+
+                    // Check if fell off bottom of screen
+                    if (this.velY < 0 && this.mesh.position.y < -15) {
+                        this.active = false;
+                        handleFruitFell(this);
+                        this.destroy(); // Important to free memory immediately
+                    }
+                } else {
+                    // Sliced Physics - Halves separate
+                    this.half1.position.x += this.velX + 0.15;
+                    this.half1.position.y += this.velY;
+                    this.half1.rotation.z -= 0.1;
+                    
+                    this.half2.position.x += this.velX - 0.15;
+                    this.half2.position.y += this.velY;
+                    this.half2.rotation.z += 0.1;
+                    
+                    this.velY -= CONFIG.GRAVITY;
+
+                    if (this.half1.position.y < -16) {
+                        this.active = false;
+                        this.destroy();
+                    }
+                }
+            }
+
+            slice() {
+                if (this.isSliced) return;
+                this.isSliced = true;
+                
+                // Hide whole fruit and label
+                this.mesh.visible = false;
+                this.label.style.opacity = '0'; // Fade out CSS
+                
+                // Position halves at current mesh position
+                this.half1.position.copy(this.mesh.position);
+                this.half2.position.copy(this.mesh.position);
+                this.half1.rotation.copy(this.mesh.rotation);
+                this.half2.rotation.copy(this.mesh.rotation);
+                
+                // Flip second half around X axis so they form a whole sphere before separating
+                this.half2.rotation.x += Math.PI; 
+
+                this.half1.visible = true;
+                this.half2.visible = true;
+
+                sfx.playSlice();
+                handleFruitSliced(this);
+                
+                // Remove label DOM element after fade
+                setTimeout(() => {
+                    if(this.label.parentElement) this.label.remove();
+                }, 150);
+            }
+
+            // Helper: 3D World to 2D Screen coordinates
+            getScreenPos(vector3) {
+                const vec = vector3.clone();
+                vec.project(camera);
+                const x = (vec.x * 0.5 + 0.5) * window.innerWidth;
+                const y = (vec.y * -0.5 + 0.5) * window.innerHeight;
+                return { x, y };
+            }
+
+            // Cleanup memory to prevent leaks
+            destroy() {
+                scene.remove(this.mesh);
+                scene.remove(this.half1);
+                scene.remove(this.half2);
+                if(this.material) this.material.dispose();
+                if(this.label.parentElement) this.label.remove();
+            }
+        }
+
+        function updateScore(amount) {
+            STATE.score += amount;
+            if (STATE.score < 0) STATE.score = 0;
+            DOM.scoreDisplay.innerText = STATE.score;
+        }
+
+        // Floating popup for points (+10, -5) at specific screen coordinates
+        function showPopup(text, x, y, isPositive) {
+            const el = document.createElement('div');
+            el.className = `popup-text ${isPositive ? 'popup-green' : 'popup-red'}`;
+            el.innerText = text;
+            el.style.left = `${x}px`;
+            el.style.top = `${y}px`;
+            DOM.labelsLayer.appendChild(el);
+            setTimeout(() => { if(el.parentElement) el.remove(); }, 1000);
+        }
+
+        // Main message display under timer
+        function showCenterMsg(text, type='bad') {
+            DOM.centerMsg.innerText = text;
+            DOM.centerMsg.style.color = type === 'good' ? '#2ecc71' : '#e74c3c';
+            DOM.centerMsg.style.opacity = '1';
+            clearTimeout(STATE.msgTimer);
+            STATE.msgTimer = setTimeout(() => { DOM.centerMsg.style.opacity = '0'; }, 2000);
+        }
+
+        function handleFruitSliced(fruit) {
+            const screenPos = fruit.getScreenPos(fruit.mesh.position);
+            if (fruit.isTarget) {
+                updateScore(CONFIG.SCORE_CORRECT);
+                showPopup(`+${CONFIG.SCORE_CORRECT}`, screenPos.x, screenPos.y, true);
+                showCenterMsg(`+${CONFIG.SCORE_CORRECT} ถูกต้อง!`, 'good');
+                sfx.playScoreUp();
+            } else {
+                updateScore(CONFIG.SCORE_WRONG);
+                showPopup(`${CONFIG.SCORE_WRONG}`, screenPos.x, screenPos.y, false);
+                showCenterMsg(`${CONFIG.SCORE_WRONG} คำหลอก!`, 'bad');
+                sfx.playScoreDown();
+            }
+            checkWaveComplete();
+        }
+
+        function handleFruitFell(fruit) {
+            // Only penalize if it was a target and wasn't sliced
+            if (fruit.isTarget && !fruit.isSliced) {
+                updateScore(CONFIG.SCORE_MISS);
+                showCenterMsg(`${CONFIG.SCORE_MISS} ปล่อยคำศัพท์ตก!`, 'bad');
+                sfx.playMiss();
+            }
+            checkWaveComplete();
+        }
+
+        function checkWaveComplete() {
+            // A wave is complete when all fruits are either sliced or have fallen out of bounds (active = false)
+            const allDone = STATE.fruits.every(f => f.isSliced || !f.active);
+            if (allDone && STATE.waveActive) {
+                STATE.waveActive = false;
+                if (STATE.wave < CONFIG.TOTAL_WAVES) {
+                    // Wait 1.5s before next wave as requested
+                    setTimeout(spawnWave, 1500);
+                } else {
+                    endGame();
+                }
+            }
+        }
+
+        function spawnWave() {
+            if(!STATE.isPlaying) return;
+            
+            STATE.wave++;
+            DOM.waveDisplay.innerText = `${STATE.wave}/${CONFIG.TOTAL_WAVES}`;
+            sfx.playWaveStart();
+            
+            // Cleanup any straggling memory just in case
+            STATE.fruits.forEach(f => f.destroy());
+            STATE.fruits = [];
+            STATE.waveActive = true;
+
+            // Select 1 target, 2 distinct dummies
+            const tWord = WORDS.target[Math.floor(Math.random() * WORDS.target.length)];
+            const d1 = WORDS.dummy[Math.floor(Math.random() * WORDS.dummy.length)];
+            let d2 = WORDS.dummy[Math.floor(Math.random() * WORDS.dummy.length)];
+            while(d2 === d1) {
+                d2 = WORDS.dummy[Math.floor(Math.random() * WORDS.dummy.length)];
+            }
+
+            const choices = [
+                { w: tWord, t: true },
+                { w: d1, t: false },
+                { w: d2, t: false }
+            ];
+            // Shuffle choices so target isn't always first
+            choices.sort(() => Math.random() - 0.5);
+
+            choices.forEach(c => {
+                STATE.fruits.push(new Fruit(c.w, c.t));
+            });
+        }
+
+        // Point to Line Segment distance squared (fast calculation)
+        function distToSegmentSquared(p, v, w) {
+            const l2 = (v.x - w.x)*(v.x - w.x) + (v.y - w.y)*(v.y - w.y);
+            if (l2 === 0) return (p.x - v.x)*(p.x - v.x) + (p.y - v.y)*(p.y - v.y);
+            let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+            t = Math.max(0, Math.min(1, t));
+            return (p.x - (v.x + t * (w.x - v.x)))*(p.x - (v.x + t * (w.x - v.x))) +
+                   (p.y - (v.y + t * (w.y - v.y)))*(p.y - (v.y + t * (w.y - v.y)));
+        }
+
+        function checkSlices() {
+            // Need at least 2 points to form a line segment for slashing
+            if (STATE.slashTrail.length < 2) return;
+            
+            // Check the most recent movement segment
+            const p1 = STATE.slashTrail[STATE.slashTrail.length - 1];
+            const p2 = STATE.slashTrail[STATE.slashTrail.length - 2];
+            
+            if (p1.break || p2.break) return; // Don't slice if movement was too slow (marked as break)
+            
+            // Define hit radius in pixels (approx 12% of screen height)
+            const hitRadius = window.innerHeight * 0.12; 
+
+            STATE.fruits.forEach(fruit => {
+                if (fruit.active && !fruit.isSliced) {
+                    const center = fruit.getScreenPos(fruit.mesh.position);
+                    const distSq = distToSegmentSquared(center, p1, p2);
+                    
+                    if (distSq < hitRadius * hitRadius) {
+                        fruit.slice();
+                    }
+                }
+            });
+        }
+
+        function onResults(results) {
+            if (!STATE.aiReady && results.multiHandLandmarks) {
+                STATE.aiReady = true;
+                updateStatusUI();
+            }
+
+            STATE.handPoints = [];
+            const now = performance.now();
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                // Look at up to 2 hands, tracking index finger tip (landmark 8)
+                for (const landmarks of results.multiHandLandmarks) {
+                    const indexTip = landmarks[8];
+                    
+                    // CRITICAL: Since video is horizontally mirrored via CSS scaleX(-1), 
+                    // we must mirror the MediaPipe X coordinate so logical tracking matches visual tracking.
+                    const px = (1 - indexTip.x) * window.innerWidth;
+                    const py = indexTip.y * window.innerHeight;
+                    
+                    STATE.handPoints.push({x: px, y: py});
+
+                    // Slash Logic based on velocity
+                    if (STATE.lastHandPos) {
+                        const dx = px - STATE.lastHandPos.x;
+                        const dy = py - STATE.lastHandPos.y;
+                        const dist = Math.sqrt(dx*dx + dy*dy);
+                        const dt = now - STATE.lastHandPos.time;
+                        
+                        if (dt > 0) {
+                            const vel = dist / dt; // pixels per millisecond
+                            if (vel > CONFIG.SLASH_VELOCITY_THRESHOLD) {
+                                STATE.slashTrail.push({x: px, y: py, time: now});
+                                // Play swoosh sound occasionally if fast enough
+                                if(Math.random() < 0.25) sfx.playSwoosh();
+                            } else {
+                                // Moving too slow, insert a break in the trail
+                                STATE.slashTrail.push({x: px, y: py, time: now, break: true});
+                            }
+                        }
+                    } else {
+                         STATE.slashTrail.push({x: px, y: py, time: now, break: true});
+                    }
+                    // Update last known position
+                    STATE.lastHandPos = {x: px, y: py, time: now};
+                }
+            } else {
+                STATE.lastHandPos = null;
+            }
+        }
+
+        // Setup MediaPipe Hands configuration
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1, // Balance between performance and accuracy
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+        hands.onResults(onResults);
+
+        function drawOverlay() {
+            ctxTrail.clearRect(0, 0, DOM.trailCanvas.width, DOM.trailCanvas.height);
+            const now = performance.now();
+
+            // Draw MediaPipe landmark points if enabled
+            if (STATE.showPoints) {
+                ctxTrail.fillStyle = 'rgba(0, 255, 204, 0.7)';
+                STATE.handPoints.forEach(p => {
+                    ctxTrail.beginPath();
+                    ctxTrail.arc(p.x, p.y, 8, 0, 2*Math.PI);
+                    ctxTrail.fill();
+                });
+            }
+
+            // Draw the Slash Trail
+            // 1. Filter out points older than TRAIL_LIFETIME
+            STATE.slashTrail = STATE.slashTrail.filter(p => now - p.time < CONFIG.TRAIL_LIFETIME);
+            
+            // 2. Draw lines between points
+            if (STATE.slashTrail.length > 1) {
+                ctxTrail.lineCap = 'round';
+                ctxTrail.lineJoin = 'round';
+                
+                for (let i = 1; i < STATE.slashTrail.length; i++) {
+                    const p1 = STATE.slashTrail[i-1];
+                    const p2 = STATE.slashTrail[i];
+                    
+                    if (p2.break) continue; // Don't connect points if hand was slow
+
+                    const age = now - p2.time;
+                    const alpha = Math.max(0, 1 - (age / CONFIG.TRAIL_LIFETIME));
+                    
+                    if (alpha > 0) {
+                        ctxTrail.beginPath();
+                        ctxTrail.moveTo(p1.x, p1.y);
+                        ctxTrail.lineTo(p2.x, p2.y);
+                        
+                        // Outer Glow
+                        ctxTrail.lineWidth = 18 * alpha;
+                        ctxTrail.strokeStyle = `rgba(0, 255, 204, ${alpha * 0.5})`;
+                        ctxTrail.stroke();
+                        
+                        // Inner Core
+                        ctxTrail.lineWidth = 6 * alpha;
+                        ctxTrail.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+                        ctxTrail.stroke();
+                    }
+                }
+            }
+        }
+
+        function formatTime(ms) {
+            const totalSeconds = Math.floor(ms / 1000);
+            const minutes = Math.floor(totalSeconds / 60);
+            const seconds = totalSeconds % 60;
+            return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        function gameLoop() {
+            requestAnimationFrame(gameLoop);
+            
+            if (STATE.isPlaying) {
+                STATE.fruits.forEach(f => f.update());
+                checkSlices();
+                
+                // Update Time HUD
+                const elapsedTime = performance.now() - STATE.gameStartTime;
+                DOM.timeDisplay.innerText = formatTime(elapsedTime);
+            }
+            
+            // Render 3D and 2D components
+            renderer.render(scene, camera);
+            drawOverlay();
+        }
+
+        function updateStatusUI() {
+            if(STATE.camReady) {
+                DOM.statusCam.className = 'status-icon ready';
+            }
+            if(STATE.aiReady) {
+                DOM.statusAI.className = 'status-icon ready';
+            }
+            if(STATE.camReady && STATE.aiReady) {
+                DOM.btnStart.style.display = 'inline-block';
+                DOM.btnCheck.style.display = 'none';
+                sfx.playSuccess();
+            }
+        }
+
+        async function initSystem() {
+            sfx.resume();
+            sfx.playClick();
+            DOM.btnCheck.disabled = true;
+            DOM.btnCheck.innerText = 'กำลังโหลด...';
+            DOM.errorMsg.style.display = 'none';
+            DOM.statusCam.className = 'status-icon loading';
+            DOM.statusAI.className = 'status-icon loading';
+
+            try {
+                // Request Camera Access
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: {ideal: 1280}, height: {ideal: 720} } });
+                DOM.video.srcObject = stream;
+                
+                DOM.video.onloadedmetadata = () => {
+                    STATE.camReady = true;
+                    updateStatusUI();
+                    
+                    // Hook MediaPipe up to the video stream via CameraUtils
+                    const cameraUtils = new Camera(DOM.video, {
+                        onFrame: async () => {
+                            await hands.send({image: DOM.video});
+                        },
+                        width: 1280,
+                        height: 720
+                    });
+                    cameraUtils.start();
+                };
+
+            } catch (err) {
+                console.error("Camera error:", err);
+                DOM.statusCam.className = 'status-icon error';
+                DOM.statusAI.className = 'status-icon error';
+                DOM.errorMsg.innerText = 'ไม่สามารถเข้าถึงกล้องได้ กรุณาตรวจสอบการอนุญาต';
+                DOM.errorMsg.style.display = 'block';
+                DOM.btnCheck.disabled = false;
+                DOM.btnCheck.innerText = 'ลองอีกครั้ง';
+                sfx.playError();
+            }
+        }
+
+        function startGame() {
+            sfx.resume();
+            DOM.startScreen.style.display = 'none';
+            DOM.endScreen.style.display = 'none';
+            DOM.hud.style.display = 'flex';
+            
+            STATE.score = 0;
+            STATE.wave = 0;
+            STATE.gameStartTime = performance.now();
+            updateScore(0);
+            DOM.waveDisplay.innerText = `0/${CONFIG.TOTAL_WAVES}`;
+            DOM.timeDisplay.innerText = "00:00";
+            DOM.centerMsg.style.opacity = '0';
+            
+            STATE.fruits.forEach(f => f.destroy());
+            STATE.fruits = [];
+            STATE.isPlaying = true;
+
+            // Short delay before first wave
+            setTimeout(spawnWave, 1000);
+        }
+
+        function endGame() {
+            STATE.isPlaying = false;
+            DOM.hud.style.display = 'none';
+            DOM.endScreen.style.display = 'flex';
+            DOM.finalScoreDisplay.innerText = STATE.score;
+            sfx.playGameOver();
+        }
+
+        // Attach UI Listeners
+        DOM.btnCheck.addEventListener('click', initSystem);
+        DOM.btnStart.addEventListener('click', () => { sfx.playClick(); startGame(); });
+        DOM.btnPlayAgain.addEventListener('click', () => { sfx.playClick(); startGame(); });
+        DOM.btnRestart.addEventListener('click', () => { sfx.playClick(); startGame(); });
+        
+        DOM.btnTogglePoints.addEventListener('click', () => {
+            sfx.playClick();
+            STATE.showPoints = !STATE.showPoints;
+            DOM.btnTogglePoints.className = `toggle-btn ${STATE.showPoints ? 'on' : 'off'}`;
+            DOM.btnTogglePoints.innerText = `จุดมือ: ${STATE.showPoints ? 'เปิด' : 'ปิด'}`;
+        });
+
+        DOM.btnToggleSound.addEventListener('click', () => {
+            sfx.playClick();
+            STATE.soundEnabled = !STATE.soundEnabled;
+            DOM.btnToggleSound.className = `toggle-btn ${STATE.soundEnabled ? 'on' : 'off'}`;
+            DOM.btnToggleSound.innerText = `เสียง: ${STATE.soundEnabled ? 'เปิด' : 'ปิด'}`;
+        });
+
+        // Start render loop immediately for backgrounds
+        gameLoop();
+
+    </script>
+</body>
+</html>
