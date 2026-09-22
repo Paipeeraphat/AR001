@@ -660,8 +660,8 @@
             
             if (p1.break || p2.break) return; // Don't slice if movement was too slow (marked as break)
             
-            // Define hit radius in pixels (approx 12% of screen height)
-            const hitRadius = window.innerHeight * 0.12; 
+            // Define hit radius in pixels (increased to 20% of screen height to cover the whole hand)
+            const hitRadius = window.innerHeight * 0.20; 
 
             STATE.fruits.forEach(fruit => {
                 if (fruit.active && !fruit.isSliced) {
@@ -685,33 +685,43 @@
             const now = performance.now();
 
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                // Look at up to 2 hands, tracking index finger tip (landmark 8)
+                // Look at up to 2 hands, tracking the center of the whole hand
                 for (const landmarks of results.multiHandLandmarks) {
-                    const indexTip = landmarks[8];
+                    let sumX = 0, sumY = 0;
                     
-                    // CRITICAL: Since video is horizontally mirrored via CSS scaleX(-1), 
-                    // we must mirror the MediaPipe X coordinate so logical tracking matches visual tracking.
-                    const px = (1 - indexTip.x) * window.innerWidth;
-                    const py = indexTip.y * window.innerHeight;
+                    // Track all 21 points to show full hand if 'showPoints' is enabled
+                    for(let i = 0; i < landmarks.length; i++) {
+                        const lx = (1 - landmarks[i].x) * window.innerWidth;
+                        const ly = landmarks[i].y * window.innerHeight;
+                        STATE.handPoints.push({x: lx, y: ly});
+                        
+                        sumX += landmarks[i].x;
+                        sumY += landmarks[i].y;
+                    }
                     
-                    STATE.handPoints.push({x: px, y: py});
+                    // Calculate the true center of the hand
+                    const avgX = sumX / landmarks.length;
+                    const avgY = sumY / landmarks.length;
+                    
+                    // CRITICAL: Mirror X coordinate to match screen
+                    const px = (1 - avgX) * window.innerWidth;
+                    const py = avgY * window.innerHeight;
 
-                    // Slash Logic based on velocity
+                    // Slash Logic: Always active regardless of velocity (ตลอดเวลา)
                     if (STATE.lastHandPos) {
                         const dx = px - STATE.lastHandPos.x;
                         const dy = py - STATE.lastHandPos.y;
                         const dist = Math.sqrt(dx*dx + dy*dy);
                         const dt = now - STATE.lastHandPos.time;
                         
+                        // Push continuous active points without breaking
+                        STATE.slashTrail.push({x: px, y: py, time: now, break: false});
+                        
                         if (dt > 0) {
                             const vel = dist / dt; // pixels per millisecond
                             if (vel > CONFIG.SLASH_VELOCITY_THRESHOLD) {
-                                STATE.slashTrail.push({x: px, y: py, time: now});
-                                // Play swoosh sound occasionally if fast enough
+                                // Play swoosh sound occasionally if moving fast
                                 if(Math.random() < 0.25) sfx.playSwoosh();
-                            } else {
-                                // Moving too slow, insert a break in the trail
-                                STATE.slashTrail.push({x: px, y: py, time: now, break: true});
                             }
                         }
                     } else {
@@ -744,7 +754,7 @@
                 ctxTrail.fillStyle = 'rgba(0, 255, 204, 0.7)';
                 STATE.handPoints.forEach(p => {
                     ctxTrail.beginPath();
-                    ctxTrail.arc(p.x, p.y, 8, 0, 2*Math.PI);
+                    ctxTrail.arc(p.x, p.y, 4, 0, 2*Math.PI); // Reduced radius for multiple hand points
                     ctxTrail.fill();
                 });
             }
